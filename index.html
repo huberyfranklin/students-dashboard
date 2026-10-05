@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>學生學習進度追蹤 Dashboard</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 CDN -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <!-- Supabase JS Client CDN -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <!-- Canvas Confetti for Celebration -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; }
+    [v-cloak] { display: none; }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 antialiased">
+  <div id="app" v-cloak>
+    
+    <!-- 1. PIN 碼解鎖遮罩畫面 (未解鎖時顯示) -->
+    <div v-if="!isUnlocked" class="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4">
+      <div class="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full border border-slate-100 text-center space-y-6">
+        <div class="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-3xl">
+          🔒
+        </div>
+        <div>
+          <h2 class="text-2xl font-bold text-slate-900">安全 PIN 碼解鎖</h2>
+          <p class="text-sm text-slate-500 mt-1">請輸入存取密碼以同步學生進度資料</p>
+        </div>
+        <form @submit.prevent="verifyPin" class="space-y-4">
+          <div>
+            <input 
+              type="password" 
+              v-model="inputPin" 
+              placeholder="請輸入 PIN 碼 (預設: 1234)"
+              maxlength="10"
+              class="w-full px-4 py-3.5 text-center text-2xl tracking-widest bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+              ref="pinInput"
+            />
+            <p v-if="pinError" class="text-rose-500 text-xs mt-2 font-medium">⚠️ PIN 碼不正確，請重新輸入</p>
+          </div>
+          <button 
+            type="submit" 
+            class="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-2xl transition shadow-lg shadow-indigo-500/25 active:scale-[0.98]"
+          >
+            解鎖進入儀表板
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- 2. 主應用程式介面 -->
+    <div v-else class="max-w-4xl mx-auto px-4 py-6 md:py-10 space-y-6">
+      
+      <!-- 設定未填寫警告提示 -->
+      <div v-if="isConfigMissing" class="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-amber-800 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div class="flex items-start gap-3">
+          <span class="text-2xl">⚙️</span>
+          <div>
+            <strong class="font-semibold block text-slate-900 mb-0.5">需要設定 Supabase 雲端憑證</strong>
+            <p class="text-xs text-slate-600">只需在此網頁輸入一次 API 金鑰，系統會自動記憶在您的瀏覽器中，更新程式碼也不會遺失！</p>
+          </div>
+        </div>
+        <button 
+          @click="showSettingsModal = true" 
+          class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs transition shadow-md shrink-0"
+        >
+          立即設定憑證
+        </button>
+      </div>
+
+      <!-- 設定彈窗 Modal -->
+      <div v-if="showSettingsModal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl shadow-2xl p-6 md:p-8 max-w-lg w-full space-y-5 border border-slate-100">
+          <div class="flex items-center justify-between border-b pb-3">
+            <h3 class="text-lg font-bold text-slate-900 flex items-center gap-2">⚙️ 設定 Supabase 連線憑證</h3>
+            <button @click="showSettingsModal = false" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+          </div>
+
+          <div class="space-y-4 text-xs">
+            <div>
+              <label class="block font-semibold text-slate-700 mb-1">Supabase Project URL</label>
+              <input 
+                type="text" 
+                v-model="savedUrl" 
+                placeholder="https://xxxxxx.supabase.co" 
+                class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="block font-semibold text-slate-700 mb-1">Supabase Anon Key</label>
+              <textarea 
+                v-model="savedKey" 
+                rows="3" 
+                placeholder="eyJhbGciOiJIUzI1Ni..." 
+                class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-end gap-2 pt-2">
+            <button 
+              @click="showSettingsModal = false" 
+              class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+            >
+              取消
+            </button>
+            <button 
+              @click="saveCredentials" 
+              class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition shadow-md"
+            >
+              儲存憑證並連線
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 頁頭與學生切換選單 -->
+      <header class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 bg-indigo-600 text-white rounded-2xl flex items-center justify-center text-2xl shadow-md shadow-indigo-500/20">
+            🎓
+          </div>
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">學習與複習進度追蹤</h1>
+            <div class="flex items-center gap-2 mt-0.5">
+              <span class="inline-block w-2 h-2 rounded-full" :class="isRealtimeConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'"></span>
+              <span class="text-xs text-slate-500">{{ isRealtimeConnected ? '雲端即時同步中' : '連線中...' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 學生切換與設定按鈕區 -->
+        <div class="flex items-center gap-3">
+          <div class="relative flex-1 md:w-56">
+            <label class="block text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1">當前學生</label>
+            <select 
+              v-model="currentStudent" 
+              @change="fetchTasks"
+              class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-semibold text-slate-800 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition cursor-pointer"
+            >
+              <option v-for="student in studentList" :key="student" :value="student">
+                👤 {{ student }}
+              </option>
+            </select>
+          </div>
+          <button 
+            @click="showSettingsModal = true" 
+            title="設定憑證" 
+            class="mt-5 p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition flex items-center justify-center"
+          >
+            ⚙️
+          </button>
+          <button 
+            @click="lockApp" 
+            title="重新鎖定" 
+            class="mt-5 p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition flex items-center justify-center"
+          >
+            🔒
+          </button>
+        </div>
+      </header>
+
+      <!-- 總體進度儀表板 (Dashboard) -->
+      <section class="bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white shadow-xl shadow-indigo-500/10">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div class="space-y-2">
+            <div class="inline-flex items-center gap-2 bg-indigo-500/40 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-medium text-indigo-100">
+              📊 {{ currentStudent }} 的學習總覽
+            </div>
+            <h2 class="text-3xl md:text-4xl font-extrabold tracking-tight">
+              完成度 {{ progressPercentage }}%
+            </h2>
+            <p class="text-indigo-200 text-sm">
+              已完成 <span class="text-white font-bold">{{ completedCount }}</span> 項 / 共 <span class="text-white font-bold">{{ totalCount }}</span> 項學習任務
+            </p>
+          </div>
+
+          <div class="flex items-center gap-4 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/10">
+            <div class="text-center px-4 border-r border-white/10">
+              <div class="text-2xl font-bold">{{ pendingCount }}</div>
+              <div class="text-[11px] text-indigo-200 uppercase font-medium mt-0.5">待完成</div>
+            </div>
+            <div class="text-center px-4">
+              <div class="text-2xl font-bold text-emerald-300">{{ completedCount }}</div>
+              <div class="text-[11px] text-indigo-200 uppercase font-medium mt-0.5">已達成</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 動態進度條 -->
+        <div class="mt-6">
+          <div class="w-full bg-indigo-950/40 rounded-full h-3.5 p-0.5 overflow-hidden">
+            <div 
+              class="bg-gradient-to-r from-emerald-400 to-teal-300 h-full rounded-full transition-all duration-500 ease-out shadow-sm"
+              :style="{ width: progressPercentage + '%' }"
+            ></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 新增學習項目表單 (分三分區: 科目、章節、任務) -->
+      <section class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-4">
+        <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+          <span>➕</span> 新增複習任務
+        </h3>
+
+        <!-- 科目快速填入按鈕區 -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 mb-2">1. 選擇科目 (快速點選)</label>
+          <div class="flex flex-wrap gap-2">
+            <button 
+              v-for="sub in subjectOptions" 
+              :key="sub" 
+              type="button" 
+              @click="newTask.subject = sub"
+              class="px-4 py-2 rounded-xl text-sm font-semibold transition border"
+              :class="newTask.subject === sub ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-500/20' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'"
+            >
+              {{ sub }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 章節與任務填寫區 -->
+        <form @submit.prevent="addTask" class="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2">
+          
+          <!-- 章節欄位 (手動 Key-in) -->
+          <div class="md:col-span-6">
+            <label class="block text-xs font-semibold text-slate-500 mb-1">2. 章節名稱 (手動輸入)</label>
+            <input 
+              type="text" 
+              v-model="newTask.chapter" 
+              placeholder="例: 第一單元 / P.20-35" 
+              required
+              class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+            />
+          </div>
+
+          <!-- 任務欄位 (下拉選單: 自修, 評量, 小卷, 大卷, 複習卷) -->
+          <div class="md:col-span-4">
+            <label class="block text-xs font-semibold text-slate-500 mb-1">3. 任務類型 (下拉選單)</label>
+            <select 
+              v-model="newTask.title" 
+              required
+              class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition cursor-pointer"
+            >
+              <option v-for="type in taskTypeOptions" :key="type" :value="type">
+                {{ type }}
+              </option>
+            </select>
+          </div>
+
+          <!-- 送出按鈕 -->
+          <div class="md:col-span-2 flex items-end">
+            <button 
+              type="submit" 
+              :disabled="isSubmitting"
+              class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm transition shadow-md shadow-indigo-500/20 active:scale-[0.98] flex items-center justify-center gap-1"
+            >
+              <span>新增至雲端</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 任務列表與過濾篩選 -->
+      <section class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+          <div class="flex items-center gap-2">
+            <h3 class="text-base font-bold text-slate-900">學習任務清單</h3>
+            <span class="bg-slate-100 text-slate-600 text-xs px-2.5 py-0.5 rounded-full font-semibold">
+              {{ filteredTasks.length }}
+            </span>
+          </div>
+
+          <!-- 科目、狀態與排序選單 -->
+          <div class="flex items-center gap-2 flex-wrap">
+            <select v-model="filterSubject" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-700">
+              <option value="ALL">所有科目</option>
+              <option v-for="subj in subjectOptions" :key="subj" :value="subj">{{ subj }}</option>
+            </select>
+            <select v-model="filterStatus" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-700">
+              <option value="ALL">全部狀態</option>
+              <option value="PENDING">未完成</option>
+              <option value="COMPLETED">已完成</option>
+            </select>
+            <select v-model="filterSort" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-700">
+              <option value="CHAPTER_ASC">🔤 章節順序 (例: 第一課 ➔ 第二課)</option>
+              <option value="CREATED_DESC">⏱️ 最新新增</option>
+              <option value="CREATED_ASC">⏳ 最早新增</option>
+              <option value="PROGRESS_ASC">📈 完成度 (低 ➔ 高)</option>
+              <option value="PROGRESS_DESC">🎉 完成度 (高 ➔ 低)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 載入狀態 -->
+        <div v-if="isLoading" class="py-12 text-center text-slate-400">
+          <div class="inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+          <p class="mt-2 text-xs">讀取雲端資料中...</p>
+        </div>
+
+        <!-- 空資料狀態 -->
+        <div v-else-if="chapterGroups.length === 0" class="py-12 text-center text-slate-400 space-y-2">
+          <div class="text-4xl">📝</div>
+          <p class="text-sm font-medium text-slate-600">目前尚無符合的章節任務</p>
+        </div>
+
+        <!-- 章節卡片網格 (以章節為單位) -->
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div 
+            v-for="group in chapterGroups" 
+            :key="group.key"
+            class="bg-white rounded-3xl border p-5 transition-all duration-200 shadow-sm hover:shadow-md flex flex-col justify-between space-y-4"
+            :class="group.isAllCompleted ? 'border-emerald-200 bg-emerald-50/15' : 'border-slate-200/80'"
+          >
+            <!-- 1. Header (科目標籤 + 章節名稱 + 刪除章節按鈕 + 進度條) -->
+            <div class="space-y-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2 flex-wrap min-w-0">
+                  <span 
+                    class="px-2.5 py-0.5 rounded-lg text-xs font-bold border shrink-0"
+                    :class="getSubjectBadgeClass(group.subject)"
+                  >
+                    {{ group.subject }}
+                  </span>
+                  <h4 class="text-base font-bold text-slate-900 truncate" :title="group.chapter">
+                    {{ group.chapter }}
+                  </h4>
+                </div>
+                
+                <!-- 刪除整個章節按鈕 -->
+                <button 
+                  @click="deleteChapter(group)" 
+                  title="刪除此章節及其所有任務" 
+                  class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition shrink-0 text-sm"
+                >
+                  🗑️
+                </button>
+              </div>
+
+              <!-- 章節完成進度條與數據 -->
+              <div class="space-y-1.5 bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+                <div class="flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span>進度 {{ group.completed }}/{{ group.total }} 項</span>
+                  <span :class="group.isAllCompleted ? 'text-emerald-600 font-bold' : 'text-slate-700 font-semibold'">
+                    {{ group.percent }}% {{ group.isAllCompleted ? '✨' : '' }}
+                  </span>
+                </div>
+                <div class="w-full bg-slate-200/70 rounded-full h-2 overflow-hidden">
+                  <div 
+                    class="h-full rounded-full transition-all duration-300"
+                    :class="group.isAllCompleted ? 'bg-emerald-500' : 'bg-indigo-600'"
+                    :style="{ width: group.percent + '%' }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Body (任務標籤清單) -->
+            <div class="pt-1">
+              <div class="text-[11px] font-semibold text-slate-400 mb-2 uppercase tracking-wider flex items-center justify-between">
+                <span>任務項目 (點擊切換狀態)</span>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button 
+                  v-for="task in group.tasks" 
+                  :key="task.id"
+                  type="button"
+                  @click="toggleTaskStatus(task)"
+                  class="group/chip relative px-3 py-1.5 rounded-xl text-xs font-medium transition-all duration-200 flex items-center gap-1.5 active:scale-95 cursor-pointer select-none"
+                  :class="task.completed 
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 font-semibold shadow-xs' 
+                    : 'bg-slate-50 text-slate-600 border border-dashed border-slate-300 hover:border-indigo-400 hover:bg-indigo-50/50 hover:text-indigo-600'"
+                >
+                  <!-- 勾選狀態圖示 -->
+                  <span v-if="task.completed" class="text-emerald-600 font-bold">✓</span>
+                  <span v-else class="w-2 h-2 rounded-full border border-slate-400 group-hover/chip:border-indigo-500 inline-block"></span>
+                  
+                  <span>{{ task.title }}</span>
+                  
+                  <!-- 單筆任務小刪除按鈕 -->
+                  <span 
+                    @click.stop="deleteTask(task.id)" 
+                    title="刪除單筆任務"
+                    class="opacity-40 group-hover/chip:opacity-100 hover:text-rose-600 ml-1 text-[10px] text-slate-400 hover:font-bold"
+                  >✕</span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // ⚙️ 請填入您的 Supabase 設定 (注意: URL 結尾不要加斜線或 /rest/v1)
+    // =========================================================================
+    const SUPABASE_URL = "https://frorjkxujdsyuulkvttp.supabase.co/";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZyb3Jqa3h1amRzeXV1bGt2dHRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwNjg1NjgsImV4cCI6MjEwNjY0NDU2OH0.2-8XFztNMBk-0L1ot-pJnIr4FcLnI-sVn7bW8cApemY";
+    const SECURITY_PIN = "1234"; // 預設 PIN 密碼
+
+    const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const isUnlocked = ref(sessionStorage.getItem('pin_unlocked') === 'true');
+        const inputPin = ref('');
+        const pinError = ref(false);
+        const pinInput = ref(null);
+
+        const showSettingsModal = ref(false);
+        const savedUrl = ref(localStorage.getItem('supabase_url') || (SUPABASE_URL !== "YOUR_SUPABASE_URL" ? SUPABASE_URL : ''));
+        const savedKey = ref(localStorage.getItem('supabase_anon_key') || (SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY" ? SUPABASE_ANON_KEY : ''));
+
+        let supabase = null;
+        
+        // 自動清理與防呆 URL 格式
+        const sanitizeUrl = (rawUrl) => {
+          if (!rawUrl || rawUrl === "YOUR_SUPABASE_URL") return rawUrl;
+          let cleaned = rawUrl.trim().replace(/\/+$/, '');
+          cleaned = cleaned.replace(/\/rest\/v1\/?$/i, '');
+          if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+            cleaned = 'https://' + cleaned;
+          }
+          return cleaned;
+        };
+
+        const cleanUrl = computed(() => sanitizeUrl(savedUrl.value));
+        const isConfigMissing = computed(() => !cleanUrl.value || !savedKey.value);
+        const isRealtimeConnected = ref(false);
+
+        const initSupabase = () => {
+          if (!isConfigMissing.value) {
+            supabase = window.supabase.createClient(cleanUrl.value, savedKey.value);
+          }
+        };
+
+        initSupabase();
+
+        const saveCredentials = () => {
+          if (!savedUrl.value || !savedKey.value) {
+            alert('請完整輸入 URL 與 Anon Key！');
+            return;
+          }
+          localStorage.setItem('supabase_url', savedUrl.value);
+          localStorage.setItem('supabase_anon_key', savedKey.value);
+          showSettingsModal.value = false;
+          initSupabase();
+          fetchTasks();
+          setupRealtime();
+        };
+
+        const studentList = ref(['Rex', 'Doris']);
+        const currentStudent = ref('Rex');
+        const tasks = ref([]);
+        const isLoading = ref(false);
+        const isSubmitting = ref(false);
+
+        // 指定 5 大科目與 5 大任務類型
+        const subjectOptions = ['國語', '數學', '自然', '社會', '英文'];
+        const taskTypeOptions = ['自修', '評量', '小卷', '大卷', '複習卷'];
+
+        // 新增任務模型 (預設選中國語與自修)
+        const newTask = ref({
+          subject: '國語',
+          chapter: '',
+          title: '自修'
+        });
+
+        const filterSubject = ref('ALL');
+        const filterStatus = ref('ALL');
+        const filterSort = ref('CHAPTER_ASC');
+
+        const verifyPin = () => {
+          if (inputPin.value === SECURITY_PIN) {
+            isUnlocked.value = true;
+            sessionStorage.setItem('pin_unlocked', 'true');
+            pinError.value = false;
+            fetchTasks();
+            setupRealtime();
+          } else {
+            pinError.value = true;
+            inputPin.value = '';
+          }
+        };
+
+        const lockApp = () => {
+          isUnlocked.value = false;
+          sessionStorage.removeItem('pin_unlocked');
+          inputPin.value = '';
+          nextTick(() => { if (pinInput.value) pinInput.value.focus(); });
+        };
+
+        const fetchTasks = async () => {
+          if (isConfigMissing.value || !supabase) return;
+          isLoading.value = true;
+          try {
+            const { data, error } = await supabase
+              .from('tasks')
+              .select('*')
+              .eq('student_name', currentStudent.value)
+              .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            tasks.value = data || [];
+          } catch (err) {
+            console.error('Fetch tasks error:', err);
+          } finally {
+            isLoading.value = false;
+          }
+        };
+
+        const setupRealtime = () => {
+          if (isConfigMissing.value || !supabase) return;
+          
+          supabase
+            .channel('public:tasks')
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'tasks' },
+              (payload) => {
+                if (payload.new && payload.new.student_name === currentStudent.value ||
+                    payload.old && payload.old.student_name === currentStudent.value) {
+                  fetchTasks();
+                }
+              }
+            )
+            .subscribe((status) => {
+              if (status === 'SUBSCRIBED') {
+                isRealtimeConnected.value = true;
+              }
+            });
+        };
+
+        const addTask = async () => {
+          if (!newTask.value.subject || !newTask.value.chapter.trim() || !newTask.value.title) return;
+          if (isConfigMissing.value || !supabase) {
+            alert('請先填入 Supabase URL 與 Anon Key！');
+            return;
+          }
+
+          isSubmitting.value = true;
+          try {
+            const payload = {
+              student_name: currentStudent.value,
+              subject: newTask.value.subject,
+              chapter: newTask.value.chapter.trim(),
+              title: newTask.value.title,
+              completed: false
+            };
+
+            const { error } = await supabase.from('tasks').insert([payload]);
+            if (error) throw error;
+
+            newTask.value.chapter = ''; // 清空章節，保留科目與任務
+            await fetchTasks();
+          } catch (err) {
+            console.error('Add task error:', err);
+            alert('新增失敗: ' + err.message);
+          } finally {
+            isSubmitting.value = false;
+          }
+        };
+
+        const toggleTaskStatus = async (task) => {
+          if (isConfigMissing.value || !supabase) return;
+          const targetStatus = !task.completed;
+          task.completed = targetStatus;
+
+          if (targetStatus && window.confetti) {
+            confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
+          }
+
+          try {
+            const { error } = await supabase
+              .from('tasks')
+              .update({ completed: targetStatus })
+              .eq('id', task.id);
+
+            if (error) throw error;
+          } catch (err) {
+            console.error('Update status error:', err);
+            task.completed = !targetStatus;
+          }
+        };
+
+        const deleteTask = async (taskId) => {
+          if (!confirm('確定要刪除此筆任務嗎？')) return;
+          if (isConfigMissing.value || !supabase) return;
+
+          try {
+            const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+            if (error) throw error;
+            tasks.value = tasks.value.filter(t => t.id !== taskId);
+          } catch (err) {
+            console.error('Delete task error:', err);
+            alert('刪除失敗: ' + err.message);
+          }
+        };
+
+        const totalCount = computed(() => tasks.value.length);
+        const completedCount = computed(() => tasks.value.filter(t => t.completed).length);
+        const pendingCount = computed(() => totalCount.value - completedCount.value);
+        const progressPercentage = computed(() => {
+          if (totalCount.value === 0) return 0;
+          return Math.round((completedCount.value / totalCount.value) * 100);
+        });
+
+        const filteredTasks = computed(() => {
+          return tasks.value.filter(t => {
+            const matchSubject = filterSubject.value === 'ALL' || t.subject === filterSubject.value;
+            const matchStatus = filterStatus.value === 'ALL' || 
+              (filterStatus.value === 'COMPLETED' && t.completed) ||
+              (filterStatus.value === 'PENDING' && !t.completed);
+            return matchSubject && matchStatus;
+          });
+        });
+
+        // 章節編號自然排序解析 (例: 第一課、第一單元、第2課、第10單元)
+        const parseChapterNumber = (chapterStr) => {
+          if (!chapterStr) return 99999;
+          const zhMap = {
+            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+            '十一': 11, '十二': 12, '十三': 13, '十四': 14, '十五': 15,
+            '十六': 16, '十七': 17, '十八': 18, '十九': 19, '二十': 20
+          };
+          const match = chapterStr.match(/第([0-9一二三四五六七八九十]+)[課單章節]/);
+          if (match) {
+            const raw = match[1];
+            if (!isNaN(raw)) return parseInt(raw, 10);
+            if (zhMap[raw]) return zhMap[raw];
+          }
+          const numMatch = chapterStr.match(/\d+/);
+          if (numMatch) return parseInt(numMatch[0], 10);
+          return 99999;
+        };
+
+        const chapterGroups = computed(() => {
+          const groups = {};
+          
+          filteredTasks.value.forEach(task => {
+            const key = `${task.subject}:::${task.chapter || '未分類章節'}`;
+            if (!groups[key]) {
+              groups[key] = {
+                key,
+                subject: task.subject,
+                chapter: task.chapter || '未分類章節',
+                tasks: [],
+                total: 0,
+                completed: 0,
+                percent: 0,
+                isAllCompleted: false,
+                latestCreatedAt: task.created_at || '',
+                earliestCreatedAt: task.created_at || ''
+              };
+            }
+            groups[key].tasks.push(task);
+            groups[key].total++;
+            if (task.completed) {
+              groups[key].completed++;
+            }
+            if (task.created_at && (!groups[key].latestCreatedAt || task.created_at > groups[key].latestCreatedAt)) {
+              groups[key].latestCreatedAt = task.created_at;
+            }
+            if (task.created_at && (!groups[key].earliestCreatedAt || task.created_at < groups[key].earliestCreatedAt)) {
+              groups[key].earliestCreatedAt = task.created_at;
+            }
+          });
+
+          // 卡片內部任務固定依標準順序排列：自修 ➔ 評量 ➔ 小卷 ➔ 大卷 ➔ 複習卷
+          const taskOrderMap = { '自修': 1, '評量': 2, '小卷': 3, '大卷': 4, '複習卷': 5 };
+
+          const groupList = Object.values(groups).map(g => {
+            g.percent = g.total > 0 ? Math.round((g.completed / g.total) * 100) : 0;
+            g.isAllCompleted = g.total > 0 && g.completed === g.total;
+            g.tasks.sort((a, b) => {
+              const orderA = taskOrderMap[a.title] || 99;
+              const orderB = taskOrderMap[b.title] || 99;
+              return orderA - orderB;
+            });
+            return g;
+          });
+
+          // 依使用者選取的排序模式進行排序
+          const subjectOrderMap = { '國語': 1, '數學': 2, '自然': 3, '社會': 4, '英文': 5 };
+
+          return groupList.sort((a, b) => {
+            if (filterSort.value === 'CHAPTER_ASC') {
+              // 1. 科目順序
+              const subA = subjectOrderMap[a.subject] || 99;
+              const subB = subjectOrderMap[b.subject] || 99;
+              if (subA !== subB) return subA - subB;
+
+              // 2. 章節號數順序 (第一課 ➔ 第二課)
+              const numA = parseChapterNumber(a.chapter);
+              const numB = parseChapterNumber(b.chapter);
+              if (numA !== numB) return numA - numB;
+              return a.chapter.localeCompare(b.chapter, 'zh-Hant', { numeric: true });
+            } else if (filterSort.value === 'CREATED_DESC') {
+              return (b.latestCreatedAt || '').localeCompare(a.latestCreatedAt || '');
+            } else if (filterSort.value === 'CREATED_ASC') {
+              return (a.earliestCreatedAt || '').localeCompare(b.earliestCreatedAt || '');
+            } else if (filterSort.value === 'PROGRESS_ASC') {
+              return a.percent - b.percent;
+            } else if (filterSort.value === 'PROGRESS_DESC') {
+              return b.percent - a.percent;
+            }
+            return 0;
+          });
+        });
+
+        const deleteChapter = async (group) => {
+          if (!confirm(`確定要刪除「${group.subject} - ${group.chapter}」及其包含的所有 ${group.total} 個任務嗎？`)) return;
+          if (isConfigMissing.value || !supabase) return;
+
+          try {
+            const taskIds = group.tasks.map(t => t.id);
+            const { error } = await supabase
+              .from('tasks')
+              .delete()
+              .in('id', taskIds);
+
+            if (error) throw error;
+            tasks.value = tasks.value.filter(t => !taskIds.includes(t.id));
+          } catch (err) {
+            console.error('Delete chapter error:', err);
+            alert('刪除章節失敗: ' + err.message);
+          }
+        };
+
+        const getSubjectBadgeClass = (subject) => {
+          switch (subject) {
+            case '國語': return 'bg-rose-50 text-rose-700 border-rose-200/70';
+            case '數學': return 'bg-blue-50 text-blue-700 border-blue-200/70';
+            case '自然': return 'bg-emerald-50 text-emerald-700 border-emerald-200/70';
+            case '社會': return 'bg-amber-50 text-amber-700 border-amber-200/70';
+            case '英文': return 'bg-purple-50 text-purple-700 border-purple-200/70';
+            default: return 'bg-indigo-50 text-indigo-700 border-indigo-200/70';
+          }
+        };
+
+        onMounted(() => {
+          if (isUnlocked.value) {
+            fetchTasks();
+            setupRealtime();
+          }
+        });
+
+        return {
+          isUnlocked, inputPin, pinError, pinInput, verifyPin, lockApp,
+          showSettingsModal, savedUrl, savedKey, saveCredentials,
+          isConfigMissing, isRealtimeConnected, studentList, currentStudent,
+          tasks, isLoading, isSubmitting, newTask, subjectOptions, taskTypeOptions,
+          filterSubject, filterStatus, filterSort, filteredTasks, chapterGroups,
+          totalCount, completedCount, pendingCount, progressPercentage,
+          getSubjectBadgeClass, deleteChapter,
+          fetchTasks, addTask, toggleTaskStatus, deleteTask
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
